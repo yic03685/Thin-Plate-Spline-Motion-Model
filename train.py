@@ -7,6 +7,7 @@ from torch.optim.lr_scheduler import MultiStepLR
 from torch.nn.utils import clip_grad_norm_
 from frames_dataset import DatasetRepeater
 import math
+import wandb
 
 def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset):
     train_params = config['train_params']
@@ -48,9 +49,11 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
         generator_full = torch.nn.DataParallel(generator_full).cuda()  
         
     bg_start = train_params['bg_start']
-    
+
     with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'], 
-                checkpoint_freq=train_params['checkpoint_freq']) as logger:
+                checkpoint_freq=train_params['checkpoint_freq'],
+                models=[inpainting_network, dense_motion_network, kp_detector]
+                ) as logger:
         for epoch in trange(start_epoch, train_params['num_epochs']):
             for x in dataloader:
                 if(torch.cuda.is_available()):
@@ -91,4 +94,5 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                 model_save['optimizer_bg_predictor'] = optimizer_bg_predictor
             
             logger.log_epoch(epoch, model_save, inp=x, out=generated)
+
 

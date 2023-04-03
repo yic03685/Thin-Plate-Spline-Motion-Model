@@ -8,10 +8,12 @@ from skimage.draw import circle
 
 import matplotlib.pyplot as plt
 import collections
+import wandb
 
 
 class Logger:
-    def __init__(self, log_dir, checkpoint_freq=50, visualizer_params=None, zfill_num=8, log_file_name='log.txt'):
+    def __init__(self, log_dir, checkpoint_freq=50, visualizer_params=None,
+                 zfill_num=8, log_file_name='log.txt', models=()):
 
         self.loss_list = []
         self.cpk_dir = log_dir
@@ -25,6 +27,9 @@ class Logger:
         self.epoch = 0
         self.best_loss = float('inf')
         self.names = None
+        wandb.init(project="TPSMM", dir=log_dir)
+        for model in models:
+            wandb.watch(model)
 
     def log_scores(self, loss_names):
         loss_mean = np.array(self.loss_list).mean(axis=0)
@@ -82,11 +87,13 @@ class Logger:
         if 'models' in self.__dict__:
             self.save_cpk()
         self.log_file.close()
+        wandb.finish()
 
     def log_iter(self, losses):
         losses = collections.OrderedDict(losses.items())
         self.names = list(losses.keys())
         self.loss_list.append(list(losses.values()))
+        wandb.log(losses)
 
     def log_epoch(self, epoch, models, inp, out):
         self.epoch = epoch
