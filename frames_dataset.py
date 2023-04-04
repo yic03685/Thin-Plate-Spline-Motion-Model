@@ -103,6 +103,7 @@ class FramesDataset(Dataset):
         return len(self.videos)
 
     def __getitem__(self, idx):
+        path = None
         try:
             if self.is_train and self.id_sampling:
                 name = self.videos[idx]
@@ -157,6 +158,7 @@ class FramesDataset(Dataset):
         except Exception as e:
             print(e)
             print("Error reading video: %s" % path)
+
             return self.__getitem__(idx + 1)
 
 

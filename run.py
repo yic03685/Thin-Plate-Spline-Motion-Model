@@ -19,7 +19,6 @@ from train_avd import train_avd
 from reconstruction import reconstruction
 import os 
 
-
 if __name__ == "__main__":
     
     if sys.version_info[0] < 3:
@@ -46,30 +45,20 @@ if __name__ == "__main__":
     inpainting = InpaintingNetwork(**config['model_params']['generator_params'],
                                         **config['model_params']['common_params'])
 
-    if torch.cuda.is_available():
-        cuda_device = torch.device('cuda:'+str(opt.device_ids[0]))
-        inpainting.to(cuda_device)
 
     kp_detector = KPDetector(**config['model_params']['common_params'])
     dense_motion_network = DenseMotionNetwork(**config['model_params']['common_params'],
                                               **config['model_params']['dense_motion_params'])
-                                                           
-    if torch.cuda.is_available():
-        kp_detector.to(opt.device_ids[0])
-        dense_motion_network.to(opt.device_ids[0])
+
 
     bg_predictor = None
     if (config['model_params']['common_params']['bg']):
         bg_predictor = BGMotionPredictor()
-        if torch.cuda.is_available():
-            bg_predictor.to(opt.device_ids[0])
 
     avd_network = None
     if opt.mode == "train_avd":
         avd_network = AVDNetwork(num_tps=config['model_params']['common_params']['num_tps'],
                              **config['model_params']['avd_network_params'])
-        if torch.cuda.is_available():
-            avd_network.to(opt.device_ids[0])
 
     dataset = FramesDataset(is_train=(opt.mode.startswith('train')), **config['dataset_params'])
 
