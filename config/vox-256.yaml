@@ -1,5 +1,5 @@
 dataset_params:
-  root_dir: ../vox
+  root_dir: vox_256
   frame_shape: null
   id_sampling: True
   augmentation_params:
@@ -58,12 +58,12 @@ train_params:
     bg: 10
 
 train_avd_params:
-  num_epochs: 200
-  num_repeats: 300
-  batch_size: 256
-  dataloader_workers: 24
-  checkpoint_freq: 50
-  epoch_milestones: [140, 180]
+  num_epochs: 100
+  num_repeats: 1
+  batch_size: 8
+  dataloader_workers: 6
+  checkpoint_freq: 1
+  epoch_milestones: [10, 20]
   lr: 1.0e-3
   lambda_shift: 1
   random_scale: 0.25

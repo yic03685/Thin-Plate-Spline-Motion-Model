@@ -8,13 +8,12 @@ from torch.nn.utils import clip_grad_norm_
 from frames_dataset import DatasetRepeater
 from tqdm import tqdm
 import math
-import bitsandbytes as bnb
 from accelerate import Accelerator
 
 accelerator = Accelerator()
 
 def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset,
-          optimizer_class=bnb.optim.Adam8bit
+          optimizer_class=torch.optim.Adam
           ):
     train_params = config['train_params']
 
@@ -43,6 +42,8 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
 
     scheduler_optimizer = MultiStepLR(optimizer, train_params['epoch_milestones'], gamma=0.1,
                                       last_epoch=start_epoch - 1)
+
+    scheduler_bg_predictor = None
     if bg_predictor:
         scheduler_bg_predictor = MultiStepLR(optimizer_bg_predictor, train_params['epoch_milestones'],
                                               gamma=0.1, last_epoch=start_epoch - 1)
@@ -85,7 +86,11 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                     optimizer_bg_predictor.zero_grad()
                 
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses_generator.items()}
-                logger.log_iter(losses=losses)
+                lrs = {
+                    'lr_generator': scheduler_optimizer.get_last_lr()[0],
+                    'lr_bg_predictor': scheduler_bg_predictor.get_last_lr()[0] if bg_predictor else 0
+                }
+                logger.log_iter(losses=losses, others=lrs)
 
             scheduler_optimizer.step()
             if bg_predictor:

@@ -17,7 +17,15 @@ import torch
 from train import train
 from train_avd import train_avd
 from reconstruction import reconstruction
-import os 
+import os
+import bitsandbytes as bnb
+
+optimizer_choices = {
+    'adam': torch.optim.Adam,
+    'adamw': torch.optim.AdamW,
+    'adam8bit': bnb.optim.Adam8bit,
+    "adamw8bit": bnb.optim.AdamW8bit,
+}
 
 if __name__ == "__main__":
     
@@ -29,8 +37,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", default="train", choices=["train", "reconstruction", "train_avd"])
     parser.add_argument("--log_dir", default='log', help="path to log into")
     parser.add_argument("--checkpoint", default=None, help="path to checkpoint to restore")
-    parser.add_argument("--device_ids", default="0,1", type=lambda x: list(map(int, x.split(','))),
-                        help="Names of the devices comma separated.")
+    parser.add_argument("--optimizer_class", default="adam", choices=optimizer_choices.keys())
+
 
     opt = parser.parse_args()
     with open(opt.config) as f:
@@ -61,18 +69,24 @@ if __name__ == "__main__":
                              **config['model_params']['avd_network_params'])
 
     dataset = FramesDataset(is_train=(opt.mode.startswith('train')), **config['dataset_params'])
+    print("Dataset length: ", len(dataset))
 
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
     if not os.path.exists(os.path.join(log_dir, os.path.basename(opt.config))):
         copy(opt.config, log_dir)
 
+    optimizer_class = optimizer_choices[opt.optimizer_class]
+
     if opt.mode == 'train':
         print("Training...")
-        train(config, inpainting, kp_detector, bg_predictor, dense_motion_network, opt.checkpoint, log_dir, dataset)
+        train(config, inpainting, kp_detector, bg_predictor, dense_motion_network, opt.checkpoint, log_dir, dataset,
+              optimizer_class=optimizer_class)
     elif opt.mode == 'train_avd':
         print("Training Animation via Disentaglement...")
-        train_avd(config, inpainting, kp_detector, bg_predictor, dense_motion_network, avd_network, opt.checkpoint, log_dir, dataset)
+        train_avd(config, inpainting, kp_detector, bg_predictor, dense_motion_network, avd_network, opt.checkpoint,
+                  log_dir, dataset, optimizer_class=optimizer_class)
     elif opt.mode == 'reconstruction':
         print("Reconstruction...")
+        #TODO: update to accelerate
         reconstruction(config, inpainting, kp_detector, bg_predictor, dense_motion_network, opt.checkpoint, log_dir, dataset)

@@ -1,5 +1,6 @@
+# Use this file to finetune from a pretrained 256x256 model
 dataset_params:
-  root_dir: vox_768
+  root_dir: vox
   frame_shape: null
   id_sampling: True
   augmentation_params:
@@ -35,18 +36,19 @@ model_params:
 
 train_params:
   num_epochs: 100
-  num_repeats: 75
+  num_repeats: 10
   epoch_milestones: [70, 90]
-  lr_generator: 2.0e-4
-  batch_size: 1
+  # Higher LR seems to bring problems when finetuning
+  lr_generator: 2.0e-5
+  batch_size: 4
   scales: [1, 0.5, 0.25, 0.125]
-  dataloader_workers: 12
-  checkpoint_freq: 1
-  dropout_epoch: 35
+  dataloader_workers: 6
+  checkpoint_freq: 2
+  dropout_epoch: 0
   dropout_maxp: 0.3
   dropout_startp: 0.1
   dropout_inc_epoch: 10
-  bg_start: 10
+  bg_start: 0
   transform_params:
     sigma_affine: 0.05
     sigma_tps: 0.005
@@ -59,11 +61,11 @@ train_params:
 
 train_avd_params:
   num_epochs: 200
-  num_repeats: 300
-  batch_size: 256
-  dataloader_workers: 24
-  checkpoint_freq: 50
-  epoch_milestones: [140, 180]
+  num_repeats: 1
+  batch_size: 4
+  dataloader_workers: 6
+  checkpoint_freq: 2
+  epoch_milestones: [10, 20]
   lr: 1.0e-3
   lambda_shift: 1
   random_scale: 0.25

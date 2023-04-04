@@ -1,3 +1,5 @@
+from typing import Dict
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,6 +17,7 @@ class Logger:
     def __init__(self, log_dir, checkpoint_freq=50, visualizer_params=None,
                  zfill_num=8, log_file_name='log.txt', models=()):
 
+        self.models = None
         self.loss_list = []
         self.cpk_dir = log_dir
         self.visualizations_dir = os.path.join(log_dir, 'train-vis')
@@ -43,19 +46,21 @@ class Logger:
 
     def visualize_rec(self, inp, out):
         image = self.visualizer.visualize(inp['driving'], inp['source'], out)
-        imageio.imsave(os.path.join(self.visualizations_dir, "%s-rec.png" % str(self.epoch).zfill(self.zfill_num)), image)
+        imageio.imsave(os.path.join(self.visualizations_dir, "%s-rec.png" % str(self.epoch).zfill(self.zfill_num)),
+                       image)
+        wandb.log({"image": [wandb.Image(image)]})
 
     def save_cpk(self, emergent=False):
         cpk = {k: v.state_dict() for k, v in self.models.items()}
         cpk['epoch'] = self.epoch
-        cpk_path = os.path.join(self.cpk_dir, '%s-checkpoint.pth.tar' % str(self.epoch).zfill(self.zfill_num)) 
+        cpk_path = os.path.join(self.cpk_dir, '%s-checkpoint.pth.tar' % str(self.epoch).zfill(self.zfill_num))
         if not (os.path.exists(cpk_path) and emergent):
             torch.save(cpk, cpk_path)
 
     @staticmethod
-    def load_cpk(checkpoint_path, inpainting_network=None, dense_motion_network =None, kp_detector=None, 
-                bg_predictor=None, avd_network=None, optimizer=None, optimizer_bg_predictor=None,
-                optimizer_avd=None):
+    def load_cpk(checkpoint_path, inpainting_network=None, dense_motion_network=None, kp_detector=None,
+                 bg_predictor=None, avd_network=None, optimizer=None, optimizer_bg_predictor=None,
+                 optimizer_avd=None):
         checkpoint = torch.load(checkpoint_path)
         if inpainting_network is not None:
             inpainting_network.load_state_dict(checkpoint['inpainting_network'])
@@ -78,6 +83,9 @@ class Logger:
         epoch = -1
         if 'epoch' in checkpoint:
             epoch = checkpoint['epoch']
+
+        print('Loaded checkpoint from epoch %d' % epoch)
+        print('keys: ', checkpoint.keys())
         return epoch
 
     def __enter__(self):
@@ -89,10 +97,12 @@ class Logger:
         self.log_file.close()
         wandb.finish()
 
-    def log_iter(self, losses):
+    def log_iter(self, losses, others: Dict = None):
         losses = collections.OrderedDict(losses.items())
         self.names = list(losses.keys())
         self.loss_list.append(list(losses.values()))
+        if others is not None:
+            losses.update(others)
         wandb.log(losses)
 
     def log_epoch(self, epoch, models, inp, out):
@@ -176,7 +186,6 @@ class Visualizer:
             images.append((prediction, kp_norm))
         images.append(prediction)
 
-
         ## Occlusion map
         if 'occlusion_map' in out:
             for i in range(len(out['occlusion_map'])):
@@ -192,7 +201,7 @@ class Visualizer:
                 image = out['deformed_source'][:, i].data.cpu()
                 # import ipdb;ipdb.set_trace()
                 image = F.interpolate(image, size=source.shape[1:3])
-                mask = out['contribution_maps'][:, i:(i+1)].data.cpu().repeat(1, 3, 1, 1)
+                mask = out['contribution_maps'][:, i:(i + 1)].data.cpu().repeat(1, 3, 1, 1)
                 mask = F.interpolate(mask, size=source.shape[1:3])
                 image = np.transpose(image.numpy(), (0, 2, 3, 1))
                 mask = np.transpose(mask.numpy(), (0, 2, 3, 1))
@@ -216,4 +225,5 @@ class Visualizer:
 
         image = self.create_image_grid(*images)
         image = (255 * image).astype(np.uint8)
+
         return image

@@ -52,7 +52,7 @@ See description of the parameters in the ```config/taichi-256.yaml```.
 ### Training
 To train a model on specific dataset run:
 ```
-CUDA_VISIBLE_DEVICES=0,1 python run.py --config config/dataset_name.yaml --device_ids 0,1
+accelerate launch run.py --config config/dataset_name.yaml --device_ids 0,1
 ```
 A log folder named after the timestamp will be created. Checkpoints, loss values, reconstruction results will be saved to this folder.
 
@@ -60,7 +60,7 @@ A log folder named after the timestamp will be created. Checkpoints, loss values
 #### Training AVD network
 To train a model on specific dataset run:
 ```
-CUDA_VISIBLE_DEVICES=0 python run.py --mode train_avd --checkpoint '{checkpoint_folder}/checkpoint.pth.tar' --config config/dataset_name.yaml
+accelerate launch run.py --mode train_avd --checkpoint '{checkpoint_folder}/checkpoint.pth.tar' --config config/dataset_name.yaml
 ```
 Checkpoints, loss values, reconstruction results will be saved to `{checkpoint_folder}`.
 
@@ -70,7 +70,7 @@ Checkpoints, loss values, reconstruction results will be saved to `{checkpoint_f
 
 To evaluate the reconstruction performance run:
 ```
-CUDA_VISIBLE_DEVICES=0 python run.py --mode reconstruction --config config/dataset_name.yaml --checkpoint '{checkpoint_folder}/checkpoint.pth.tar'
+accelerate launch run.py --mode reconstruction --config config/dataset_name.yaml --checkpoint '{checkpoint_folder}/checkpoint.pth.tar'
 ```
 The `reconstruction` subfolder will be created in `{checkpoint_folder}`.
 The generated video will be stored to this folder, also generated videos will be stored in ```png``` subfolder in loss-less '.png' format for evaluation.
@@ -81,7 +81,7 @@ To compute metrics, follow instructions from [pose-evaluation](https://github.co
 - notebook: `demo.ipynb`, edit the config cell and run for image animation.
 - python:
 ```bash
-CUDA_VISIBLE_DEVICES=0 python demo.py --config config/vox-256.yaml --checkpoint checkpoints/vox.pth.tar --source_image ./source.jpg --driving_video ./driving.mp4
+python demo.py --config config/vox-256.yaml --checkpoint checkpoints/vox.pth.tar --source_image ./source.jpg --driving_video ./driving.mp4
 ```
 
 # Acknowledgments
