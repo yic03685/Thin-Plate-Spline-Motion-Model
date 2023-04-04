@@ -6,6 +6,7 @@ from modules.model import GeneratorFullModel
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.nn.utils import clip_grad_norm_
 from frames_dataset import DatasetRepeater
+from tqdm import tqdm
 import math
 import bitsandbytes as bnb
 from accelerate import Accelerator
@@ -65,7 +66,7 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                 models=[inpainting_network, dense_motion_network, kp_detector]
                 ) as logger:
         for epoch in trange(start_epoch, train_params['num_epochs']):
-            for x in dataloader:
+            for x in tqdm(dataloader):
                 losses_generator, generated = generator_full(x, epoch)
                 loss_values = [val.mean() for val in losses_generator.values()]
                 loss = sum(loss_values)
