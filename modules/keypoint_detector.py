@@ -1,3 +1,4 @@
+import torchvision
 from torch import nn
 import torch
 from torchvision import models
@@ -11,7 +12,7 @@ class KPDetector(nn.Module):
         super(KPDetector, self).__init__()
         self.num_tps = num_tps
 
-        self.fg_encoder = models.resnet18(pretrained=False)
+        self.fg_encoder = models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
         num_features = self.fg_encoder.fc.in_features
         self.fg_encoder.fc = nn.Linear(num_features, num_tps*5*2)
 

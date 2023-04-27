@@ -1,9 +1,12 @@
-from tqdm import trange
+from tqdm import trange, tqdm
 import torch
 from torch.utils.data import DataLoader
 from logger import Logger
 from torch.optim.lr_scheduler import MultiStepLR
 from frames_dataset import DatasetRepeater
+from accelerate import Accelerator
+
+accelerator = Accelerator()
 
 
 def random_scale(kp_params, scale):
@@ -14,10 +17,10 @@ def random_scale(kp_params, scale):
 
 
 def train_avd(config, inpainting_network, kp_detector, bg_predictor, dense_motion_network, 
-              avd_network, checkpoint, log_dir, dataset):
+              avd_network, checkpoint, log_dir, dataset, optimizer_class=torch.optim.Adam):
     train_params = config['train_avd_params']
 
-    optimizer = torch.optim.Adam(avd_network.parameters(), lr=train_params['lr'], betas=(0.5, 0.999))
+    optimizer = optimizer_class(avd_network.parameters(), lr=train_params['lr'], betas=(0.5, 0.999))
 
     if checkpoint is not None:
         Logger.load_cpk(checkpoint, inpainting_network=inpainting_network, kp_detector=kp_detector,
@@ -35,11 +38,14 @@ def train_avd(config, inpainting_network, kp_detector, bg_predictor, dense_motio
     dataloader = DataLoader(dataset, batch_size=train_params['batch_size'], shuffle=True,
                             num_workers=train_params['dataloader_workers'], drop_last=True)
 
+    inpainting_network, kp_detector, dense_motion_network, optimizer, scheduler, dataloader, avd_network = accelerator.prepare(
+        inpainting_network, kp_detector, dense_motion_network, optimizer, scheduler, dataloader, avd_network)
+
     with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'], 
                 checkpoint_freq=train_params['checkpoint_freq']) as logger:
         for epoch in trange(start_epoch, train_params['num_epochs']):
             avd_network.train()
-            for x in dataloader:
+            for x in tqdm(dataloader):
                 with torch.no_grad():
                     kp_source = kp_detector(x['source'].cuda())
                     kp_driving_gt = kp_detector(x['driving'].cuda())
@@ -51,8 +57,9 @@ def train_avd(config, inpainting_network, kp_detector, bg_predictor, dense_motio
                 
                 loss_dict = {'rec_kp': reconstruction_kp}
                 loss = reconstruction_kp
-                
-                loss.backward()
+
+                accelerator.backward(loss)
+
                 optimizer.step()
                 optimizer.zero_grad()
 

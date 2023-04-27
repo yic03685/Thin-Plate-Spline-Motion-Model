@@ -1,3 +1,6 @@
+import os
+import shutil
+
 import matplotlib
 matplotlib.use('Agg')
 import sys
@@ -64,35 +67,38 @@ def load_checkpoints(config_path, checkpoint_path, device):
     return inpainting, kp_detector, dense_motion_network, avd_network
 
 
-def make_animation(source_image, driving_video, inpainting_network, kp_detector, dense_motion_network, avd_network, device, mode = 'relative'):
+def make_animation(source_image, driving_video_generator, inpainting_network, kp_detector, dense_motion_network, avd_network, device:torch.device, mode = 'relative'):
     assert mode in ['standard', 'relative', 'avd']
     with torch.no_grad():
-        predictions = []
-        source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
-        source = source.to(device)
-        driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3).to(device)
-        kp_source = kp_detector(source)
-        kp_driving_initial = kp_detector(driving[:, :, 0])
+        with torch.autocast(device_type=str(device), dtype=torch.float16):
+            source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
+            source = source.to(device)
+            #driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3).to(device)
+            kp_source = kp_detector(source)
 
-        for frame_idx in tqdm(range(driving.shape[2])):
-            driving_frame = driving[:, :, frame_idx]
-            driving_frame = driving_frame.to(device)
-            kp_driving = kp_detector(driving_frame)
-            if mode == 'standard':
-                kp_norm = kp_driving
-            elif mode=='relative':
-                kp_norm = relative_kp(kp_source=kp_source, kp_driving=kp_driving,
-                                    kp_driving_initial=kp_driving_initial)
-            elif mode == 'avd':
-                kp_norm = avd_network(kp_source, kp_driving)
-            dense_motion = dense_motion_network(source_image=source, kp_driving=kp_norm,
-                                                    kp_source=kp_source, bg_param = None, 
-                                                    dropout_flag = False)
-            out = inpainting_network(source, dense_motion)
+            first_frame = True
 
-            predictions.append(np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0])
-    return predictions
+            for driving_frame_np in tqdm(driving_video_generator):
 
+                driving_frame = torch.tensor(driving_frame_np[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2).to(
+                    device)
+                if first_frame:
+                    kp_driving_initial = kp_detector(driving_frame)
+                    first_frame = False
+                kp_driving = kp_detector(driving_frame)
+                if mode == 'standard':
+                    kp_norm = kp_driving
+                elif mode=='relative':
+                    kp_norm = relative_kp(kp_source=kp_source, kp_driving=kp_driving,
+                                        kp_driving_initial=kp_driving_initial)
+                elif mode == 'avd':
+                    kp_norm = avd_network(kp_source, kp_driving)
+                dense_motion = dense_motion_network(source_image=source, kp_driving=kp_norm,
+                                                        kp_source=kp_source, bg_param = None,
+                                                        dropout_flag = False)
+                out = inpainting_network(source, dense_motion)
+
+                yield np.transpose(out['prediction'].data.cpu().numpy(), [0, 2, 3, 1])[0]
 
 def find_best_frame(source, driving, cpu):
     import face_alignment
@@ -121,7 +127,32 @@ def find_best_frame(source, driving, cpu):
         except:
             pass
     return frame_num
+def read_and_resize_frames(video_path, img_shape):
+    reader = imageio.get_reader(video_path)
+    for frame in reader:
+        resized_frame = resize(frame, img_shape)[..., :3]
+        yield resized_frame
+    reader.close()
 
+def read_and_resize_frames_forward(video_path, img_shape, start_frame):
+    reader = imageio.get_reader(video_path)
+    for idx, frame in enumerate(reader):
+        if idx < start_frame:
+            continue
+        resized_frame = resize(frame, img_shape)[..., :3]
+        yield resized_frame
+    reader.close()
+
+def read_and_resize_frames_backward(video_path, img_shape, end_frame):
+    reader = imageio.get_reader(video_path)
+    frames = []
+    for idx, frame in enumerate(reader):
+        if idx > end_frame:
+            break
+        resized_frame = resize(frame, img_shape)[..., :3]
+        frames.append(resized_frame)
+    reader.close()
+    return reversed(frames)
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -147,12 +178,6 @@ if __name__ == "__main__":
     source_image = imageio.imread(opt.source_image)
     reader = imageio.get_reader(opt.driving_video)
     fps = reader.get_meta_data()['fps']
-    driving_video = []
-    try:
-        for im in reader:
-            driving_video.append(im)
-    except RuntimeError:
-        pass
     reader.close()
     
     if opt.cpu:
@@ -161,19 +186,40 @@ if __name__ == "__main__":
         device = torch.device('cuda')
     
     source_image = resize(source_image, opt.img_shape)[..., :3]
-    driving_video = [resize(frame, opt.img_shape)[..., :3] for frame in driving_video]
     inpainting, kp_detector, dense_motion_network, avd_network = load_checkpoints(config_path = opt.config, checkpoint_path = opt.checkpoint, device = device)
- 
-    if opt.find_best_frame:
-        i = find_best_frame(source_image, driving_video, opt.cpu)
-        print ("Best frame: " + str(i))
-        driving_forward = driving_video[i:]
-        driving_backward = driving_video[:(i+1)][::-1]
-        predictions_forward = make_animation(source_image, driving_forward, inpainting, kp_detector, dense_motion_network, avd_network, device = device, mode = opt.mode)
-        predictions_backward = make_animation(source_image, driving_backward, inpainting, kp_detector, dense_motion_network, avd_network, device = device, mode = opt.mode)
-        predictions = predictions_backward[::-1] + predictions_forward[1:]
-    else:
-        predictions = make_animation(source_image, driving_video, inpainting, kp_detector, dense_motion_network, avd_network, device = device, mode = opt.mode)
-    
-    imageio.mimsave(opt.result_video, [img_as_ubyte(frame) for frame in predictions], fps=fps)
 
+    def reversed_generator(generator):
+        frames = list(generator)
+        return reversed(frames)
+
+    def append_frame_to_writer(frame, writer):
+        writer.append_data(img_as_ubyte(frame))
+
+
+    if opt.find_best_frame:
+        driving_video_generator = read_and_resize_frames(opt.driving_video, opt.img_shape)
+        i = find_best_frame(source_image, driving_video_generator, opt.cpu)
+        print("Best frame:", i)
+        driving_forward = read_and_resize_frames_forward(opt.driving_video, opt.img_shape, i)
+        driving_backward = read_and_resize_frames_backward(opt.driving_video, opt.img_shape, i)
+
+        with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
+            # Generate and append frames for the reversed backward animation
+            backward_animation = make_animation(source_image, driving_backward, inpainting, kp_detector,
+                                                dense_motion_network, avd_network, device=device, mode=opt.mode)
+            for frame in reversed_generator(backward_animation):
+                append_frame_to_writer(frame, writer)
+
+            # Generate and append frames for forward animation, skipping the first frame
+            for idx, frame in enumerate(
+                    make_animation(source_image, driving_forward, inpainting, kp_detector, dense_motion_network,
+                                   avd_network, device=device, mode=opt.mode)):
+                if idx == 0:
+                    continue
+                append_frame_to_writer(frame, writer)
+    else:
+        with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
+            driving_video_generator = read_and_resize_frames(opt.driving_video, opt.img_shape)
+            for frame in make_animation(source_image, driving_video_generator, inpainting, kp_detector, dense_motion_network,
+                                        avd_network, device=device, mode=opt.mode):
+                append_frame_to_writer(frame, writer)

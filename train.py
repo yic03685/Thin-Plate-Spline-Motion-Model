@@ -6,18 +6,27 @@ from modules.model import GeneratorFullModel
 from torch.optim.lr_scheduler import MultiStepLR
 from torch.nn.utils import clip_grad_norm_
 from frames_dataset import DatasetRepeater
+from tqdm import tqdm
 import math
+from accelerate import Accelerator
 
-def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset):
+accelerator = Accelerator()
+
+def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_network, checkpoint, log_dir, dataset,
+          optimizer_class=torch.optim.Adam
+          ):
     train_params = config['train_params']
-    optimizer = torch.optim.Adam(
+
+    optimizer = optimizer_class(
         [{'params': list(inpainting_network.parameters()) +
                     list(dense_motion_network.parameters()) +
-                    list(kp_detector.parameters()), 'initial_lr': train_params['lr_generator']}],lr=train_params['lr_generator'], betas=(0.5, 0.999), weight_decay = 1e-4)
+                    list(kp_detector.parameters()),
+          'initial_lr': train_params['lr_generator']}],
+        lr=train_params['lr_generator'], betas=(0.5, 0.999), weight_decay = 1e-4)
     
     optimizer_bg_predictor = None
     if bg_predictor:
-        optimizer_bg_predictor = torch.optim.Adam(
+        optimizer_bg_predictor = optimizer_class(
             [{'params':bg_predictor.parameters(),'initial_lr': train_params['lr_generator']}], 
             lr=train_params['lr_generator'], betas=(0.5, 0.999), weight_decay = 1e-4)
 
@@ -33,9 +42,12 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
 
     scheduler_optimizer = MultiStepLR(optimizer, train_params['epoch_milestones'], gamma=0.1,
                                       last_epoch=start_epoch - 1)
+
+    scheduler_bg_predictor = None
     if bg_predictor:
         scheduler_bg_predictor = MultiStepLR(optimizer_bg_predictor, train_params['epoch_milestones'],
                                               gamma=0.1, last_epoch=start_epoch - 1)
+        bg_predictor, optimizer_bg_predictor = accelerator.prepare(bg_predictor, optimizer_bg_predictor)
 
     if 'num_repeats' in train_params or train_params['num_repeats'] != 1:
         dataset = DatasetRepeater(dataset, train_params['num_repeats'])
@@ -43,24 +55,24 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                             num_workers=train_params['dataloader_workers'], drop_last=True)
 
     generator_full = GeneratorFullModel(kp_detector, bg_predictor, dense_motion_network, inpainting_network, train_params)
-
-    if torch.cuda.is_available():
-        generator_full = torch.nn.DataParallel(generator_full).cuda()  
         
     bg_start = train_params['bg_start']
-    
-    with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'], 
-                checkpoint_freq=train_params['checkpoint_freq']) as logger:
-        for epoch in trange(start_epoch, train_params['num_epochs']):
-            for x in dataloader:
-                if(torch.cuda.is_available()):
-                    x['driving'] = x['driving'].cuda()
-                    x['source'] = x['source'].cuda()
 
+    inpainting_network, kp_detector, dense_motion_network, optimizer, scheduler_optimizer, dataloader, generator_full = accelerator.prepare(
+        inpainting_network, kp_detector, dense_motion_network, optimizer, scheduler_optimizer, dataloader, generator_full)
+
+
+    with Logger(log_dir=log_dir, visualizer_params=config['visualizer_params'], 
+                checkpoint_freq=train_params['checkpoint_freq'],
+                models=[inpainting_network, dense_motion_network, kp_detector]
+                ) as logger:
+        for epoch in trange(start_epoch, train_params['num_epochs']):
+            for x in tqdm(dataloader):
                 losses_generator, generated = generator_full(x, epoch)
                 loss_values = [val.mean() for val in losses_generator.values()]
                 loss = sum(loss_values)
-                loss.backward()
+
+                accelerator.backward(loss)
 
                 clip_grad_norm_(kp_detector.parameters(), max_norm=10, norm_type = math.inf)
                 clip_grad_norm_(dense_motion_network.parameters(), max_norm=10, norm_type = math.inf)
@@ -74,7 +86,11 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                     optimizer_bg_predictor.zero_grad()
                 
                 losses = {key: value.mean().detach().data.cpu().numpy() for key, value in losses_generator.items()}
-                logger.log_iter(losses=losses)
+                lrs = {
+                    'lr_generator': scheduler_optimizer.get_last_lr()[0],
+                    'lr_bg_predictor': scheduler_bg_predictor.get_last_lr()[0] if bg_predictor else 0
+                }
+                logger.log_iter(losses=losses, others=lrs)
 
             scheduler_optimizer.step()
             if bg_predictor:
@@ -91,4 +107,5 @@ def train(config, inpainting_network, kp_detector, bg_predictor, dense_motion_ne
                 model_save['optimizer_bg_predictor'] = optimizer_bg_predictor
             
             logger.log_epoch(epoch, model_save, inp=x, out=generated)
+
 

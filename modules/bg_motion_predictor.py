@@ -1,3 +1,4 @@
+import torchvision
 from torch import nn
 import torch
 from torchvision import models
@@ -9,7 +10,7 @@ class BGMotionPredictor(nn.Module):
 
     def __init__(self):
         super(BGMotionPredictor, self).__init__()
-        self.bg_encoder = models.resnet18(pretrained=False)
+        self.bg_encoder = models.resnet18(weights=torchvision.models.ResNet18_Weights.DEFAULT)
         self.bg_encoder.conv1 = nn.Conv2d(6, 64, kernel_size=(7, 7), stride=(2, 2), padding=(3, 3), bias=False)
         num_features = self.bg_encoder.fc.in_features
         self.bg_encoder.fc = nn.Linear(num_features, 6)
