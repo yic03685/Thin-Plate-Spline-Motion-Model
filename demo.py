@@ -1,5 +1,6 @@
 import os
 import shutil
+from contextlib import nullcontext
 
 import matplotlib
 matplotlib.use('Agg')
@@ -67,10 +68,17 @@ def load_checkpoints(config_path, checkpoint_path, device):
     return inpainting, kp_detector, dense_motion_network, avd_network
 
 
-def make_animation(source_image, driving_video_generator, inpainting_network, kp_detector, dense_motion_network, avd_network, device:torch.device, mode = 'relative'):
+def make_animation(source_image, driving_video_generator, inpainting_network, kp_detector, dense_motion_network,
+                   avd_network, device:torch.device, mode = 'relative', autocast_dtype=torch.float16, autocast=False):
     assert mode in ['standard', 'relative', 'avd']
     with torch.no_grad():
-        with torch.autocast(device_type=str(device), dtype=torch.float16):
+
+        if autocast:
+            autocast_context = torch.autocast(device_type=str(device), dtype=autocast_dtype)
+        else:
+            autocast_context = nullcontext()
+
+        with autocast_context:
             source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
             source = source.to(device)
             #driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3).to(device)
@@ -172,6 +180,7 @@ if __name__ == "__main__":
                         help="Generate from the frame that is the most alligned with source. (Only for faces, requires face_aligment lib)")
 
     parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
+    parser.add_argument("--autocast", dest="autocast", action="store_true", help="Autocast mode.")
 
     opt = parser.parse_args()
 
@@ -179,8 +188,15 @@ if __name__ == "__main__":
     reader = imageio.get_reader(opt.driving_video)
     fps = reader.get_meta_data()['fps']
     reader.close()
+
+    if opt.cpu and opt.autocast:
+        autocast_dtype = torch.bfloat16
+    else:
+        autocast_dtype = torch.float16
+
+
     
-    if opt.cpu:
+    if opt.cpu or torch.cuda.device_count() == 0:
         device = torch.device('cpu')
     else:
         device = torch.device('cuda')
@@ -206,14 +222,16 @@ if __name__ == "__main__":
         with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
             # Generate and append frames for the reversed backward animation
             backward_animation = make_animation(source_image, driving_backward, inpainting, kp_detector,
-                                                dense_motion_network, avd_network, device=device, mode=opt.mode)
+                                                dense_motion_network, avd_network, device=device, mode=opt.mode,
+                                                autocast_dtype=autocast_dtype, autocast=opt.autocast)
             for frame in reversed_generator(backward_animation):
                 append_frame_to_writer(frame, writer)
 
             # Generate and append frames for forward animation, skipping the first frame
             for idx, frame in enumerate(
                     make_animation(source_image, driving_forward, inpainting, kp_detector, dense_motion_network,
-                                   avd_network, device=device, mode=opt.mode)):
+                                   avd_network, device=device, mode=opt.mode, autocast_dtype=autocast_dtype, autocast=opt.autocast
+                                   )):
                 if idx == 0:
                     continue
                 append_frame_to_writer(frame, writer)
@@ -221,5 +239,6 @@ if __name__ == "__main__":
         with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
             driving_video_generator = read_and_resize_frames(opt.driving_video, opt.img_shape)
             for frame in make_animation(source_image, driving_video_generator, inpainting, kp_detector, dense_motion_network,
-                                        avd_network, device=device, mode=opt.mode):
+                                        avd_network, device=device, mode=opt.mode, autocast_dtype=autocast_dtype, autocast=opt.autocast
+                                        ):
                 append_frame_to_writer(frame, writer)
