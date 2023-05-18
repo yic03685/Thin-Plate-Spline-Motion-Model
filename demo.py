@@ -1,10 +1,9 @@
+import logging
 import os
-import shutil
 from contextlib import nullcontext
 
 import matplotlib
 matplotlib.use('Agg')
-import sys
 import yaml
 from argparse import ArgumentParser
 from tqdm import tqdm
@@ -18,9 +17,9 @@ from modules.inpainting_network import InpaintingNetwork
 from modules.keypoint_detector import KPDetector
 from modules.dense_motion import DenseMotionNetwork
 from modules.avd_network import AVDNetwork
+from utils import VideoReader, VideoWriter
 
-if sys.version_info[0] < 3:
-    raise Exception("You must use Python 3 or higher. Recommended version is Python 3.9")
+logger = logging.getLogger("TPSMM")
 
 def relative_kp(kp_source, kp_driving, kp_driving_initial):
 
@@ -81,7 +80,6 @@ def make_animation(source_image, driving_video_generator, inpainting_network, kp
         with autocast_context:
             source = torch.tensor(source_image[np.newaxis].astype(np.float32)).permute(0, 3, 1, 2)
             source = source.to(device)
-            #driving = torch.tensor(np.array(driving_video)[np.newaxis].astype(np.float32)).permute(0, 4, 1, 2, 3).to(device)
             kp_source = kp_detector(source)
 
             first_frame = True
@@ -136,14 +134,16 @@ def find_best_frame(source, driving, cpu):
             pass
     return frame_num
 def read_and_resize_frames(video_path, img_shape):
-    reader = imageio.get_reader(video_path)
+    reader = VideoReader(video_path)
     for frame in reader:
+        print(frame.shape)
         resized_frame = resize(frame, img_shape)[..., :3]
         yield resized_frame
+
     reader.close()
 
 def read_and_resize_frames_forward(video_path, img_shape, start_frame):
-    reader = imageio.get_reader(video_path)
+    reader = VideoReader(video_path)
     for idx, frame in enumerate(reader):
         if idx < start_frame:
             continue
@@ -152,9 +152,11 @@ def read_and_resize_frames_forward(video_path, img_shape, start_frame):
     reader.close()
 
 def read_and_resize_frames_backward(video_path, img_shape, end_frame):
-    reader = imageio.get_reader(video_path)
+    reader = VideoReader(video_path)
+
     frames = []
     for idx, frame in enumerate(reader):
+        print(frame.shape)
         if idx > end_frame:
             break
         resized_frame = resize(frame, img_shape)[..., :3]
@@ -168,8 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default='checkpoints/vox.pth.tar', help="path to checkpoint to restore")
 
     parser.add_argument("--source_image", default='./assets/source.png', help="path to source image")
-    parser.add_argument("--driving_video", default='./assets/driving.mp4', help="path to driving video")
-    parser.add_argument("--result_video", default='./result.mp4', help="path to output")
+    parser.add_argument("--driving_video", default='./assets/driving.mp4', help="path to driving video or folder of images")
+    parser.add_argument("--result_video", default='./result.mp4', help="path to output. Can be file name or folder.")
     
     parser.add_argument("--img_shape", default="256,256", type=lambda x: list(map(int, x.split(','))),
                         help='Shape of image, that the model was trained on.')
@@ -182,12 +184,19 @@ if __name__ == "__main__":
     parser.add_argument("--cpu", dest="cpu", action="store_true", help="cpu mode.")
     parser.add_argument("--autocast", dest="autocast", action="store_true", help="Autocast mode.")
 
+
     opt = parser.parse_args()
 
     source_image = imageio.imread(opt.source_image)
-    reader = imageio.get_reader(opt.driving_video)
-    fps = reader.get_meta_data()['fps']
-    reader.close()
+
+    if os.path.isdir(opt.driving_video):
+        fps = 30
+    else:
+        reader = imageio.get_reader(opt.driving_video, mode='I')
+
+        fps = reader.get_meta_data().get('fps', 30)
+
+        reader.close()
 
     if opt.cpu and opt.autocast:
         autocast_dtype = torch.bfloat16
@@ -211,19 +220,19 @@ if __name__ == "__main__":
     def append_frame_to_writer(frame, writer):
         writer.append_data(img_as_ubyte(frame))
 
-
+    writer = VideoWriter(opt.result_video, mode='I', fps=fps)
     if opt.find_best_frame:
         driving_video_generator = read_and_resize_frames(opt.driving_video, opt.img_shape)
         i = find_best_frame(source_image, driving_video_generator, opt.cpu)
-        print("Best frame:", i)
         driving_forward = read_and_resize_frames_forward(opt.driving_video, opt.img_shape, i)
         driving_backward = read_and_resize_frames_backward(opt.driving_video, opt.img_shape, i)
 
-        with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
+        with writer:
             # Generate and append frames for the reversed backward animation
             backward_animation = make_animation(source_image, driving_backward, inpainting, kp_detector,
                                                 dense_motion_network, avd_network, device=device, mode=opt.mode,
                                                 autocast_dtype=autocast_dtype, autocast=opt.autocast)
+
             for frame in reversed_generator(backward_animation):
                 append_frame_to_writer(frame, writer)
 
@@ -236,7 +245,7 @@ if __name__ == "__main__":
                     continue
                 append_frame_to_writer(frame, writer)
     else:
-        with imageio.get_writer(opt.result_video, mode='I', fps=fps) as writer:
+        with writer:
             driving_video_generator = read_and_resize_frames(opt.driving_video, opt.img_shape)
             for frame in make_animation(source_image, driving_video_generator, inpainting, kp_detector, dense_motion_network,
                                         avd_network, device=device, mode=opt.mode, autocast_dtype=autocast_dtype, autocast=opt.autocast
