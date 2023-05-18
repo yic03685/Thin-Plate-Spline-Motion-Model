@@ -6,11 +6,14 @@ import logging
 
 logger = logging.getLogger("TPSMM")
 
+IMAGE_FORMATS = ["png", "jpg", "jpeg", "bmp", "tif", "tiff"]
+
 class VideoReader:
     def __init__(self, path, **kwargs):
         self.path = path
         if os.path.isdir(path):
             self.files = sorted(os.listdir(path))
+            self.files = filter(lambda x: x.split(".")[-1].lower() in IMAGE_FORMATS, self.files)
             self.reader = None
         elif "%" in path:
             self.files = glob.glob(path)
@@ -43,6 +46,7 @@ class VideoReader:
                 yield frame
         else:
             for file in self.files:
+                print(file)
                 yield imageio.imread(os.path.join(self.path, file))
 
     def __len__(self):
